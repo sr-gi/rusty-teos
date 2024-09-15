@@ -67,3 +67,16 @@ jobs:
         with:
           src: "./watchtower-plugin/tests"
           options: "--check -l 120"
+
+  check-flake:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Check Nix flake inputs
+        uses: DeterminateSystems/flake-checker-action@v8
+      - name: Install Nix
+        uses: cachix/install-nix-action@V27
+      - name: Check flake
+        run: nix flake check
+
