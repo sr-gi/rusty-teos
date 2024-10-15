@@ -262,6 +262,117 @@ impl TryFrom<serde_json::Value> for GetAppointmentParams {
     }
 }
 
+// Errors related to `getregistrationreceipt` command
+#[derive(Debug)]
+pub enum GetRegistrationReceiptError {
+    InvalidId(String),
+    InvalidFormat(String),
+}
+
+impl std::fmt::Display for GetRegistrationReceiptError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            GetRegistrationReceiptError::InvalidId(x) => write!(f, "{x}"),
+            GetRegistrationReceiptError::InvalidFormat(x) => write!(f, "{x}"),
+        }
+    }
+}
+
+// Parameters related to the `getregistrationreceipt` command
+#[derive(Debug)]
+pub struct GetRegistrationReceiptParams {
+    pub tower_id: TowerId,
+    pub subscription_start: Option<u32>,
+    pub subscription_expiry: Option<u32>,
+}
+
+impl TryFrom<serde_json::Value> for GetRegistrationReceiptParams {
+    type Error = GetRegistrationReceiptError;
+
+    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+        match value {
+            serde_json::Value::Array(a) => {
+                let param_count = a.len();
+                if param_count == 2 {
+                    Err(GetRegistrationReceiptError::InvalidFormat((
+                        "Both ends of boundary (subscription_start and subscription_expiry) are required.").to_string()
+                    ))
+                } else if param_count != 1 && param_count != 3 {
+                    Err(GetRegistrationReceiptError::InvalidFormat(format!(
+                        "Unexpected request format. The request needs 1 or 3 parameter. Received: {param_count}"
+                    )))
+                } else {
+                    let tower_id = if let Some(s) = a.get(0).unwrap().as_str() {
+                        TowerId::from_str(s).map_err(|_| {
+                            GetRegistrationReceiptError::InvalidId("Invalid tower id".to_owned())
+                        })
+                    } else {
+                        Err(GetRegistrationReceiptError::InvalidId(
+                            "tower_id must be a hex encoded string".to_owned(),
+                        ))
+                    }?;
+
+                    let (subscription_start, subscription_expiry) = if let (Some(start), Some(expire)) = (a.get(1), a.get(2)){
+                        let start = start.as_i64().ok_or_else(|| {
+                            GetRegistrationReceiptError::InvalidFormat(
+                                "Subscription_start must be a positive integer".to_owned(),
+                            )
+                        })?;
+
+                        let expire = expire.as_i64().ok_or_else(|| {
+                            GetRegistrationReceiptError::InvalidFormat(
+                                "Subscription_expire must be a positive integer".to_owned(),
+                            )
+                        })?;
+
+                        if start >= 0 && expire > start {
+                            (Some(start as u32), Some(expire as u32))
+                        } else {
+                            return Err(GetRegistrationReceiptError::InvalidFormat(
+                                "subscription_start must be a positive integer and subscription_expire must be a positive integer greater than subscription_start".to_owned(),
+                            ));
+                        }
+                    } else {
+                        (None, None)
+                    };
+
+                    Ok(
+                        Self {
+                            tower_id,
+                            subscription_start,
+                            subscription_expiry,
+                        }
+                    )
+                }
+            },
+            serde_json::Value::Object(mut m) => {
+                let allowed_keys = ["tower_id", "subscription_start", "subscription_expiry"];
+                let param_count = m.len();
+
+                 if m.is_empty() || param_count > allowed_keys.len() {
+                    Err(GetRegistrationReceiptError::InvalidFormat(format!("Unexpected request format. The request needs 1-3 parameters. Received: {param_count}")))
+                 } else if !m.contains_key(allowed_keys[0]){
+                    Err(GetRegistrationReceiptError::InvalidId(format!("{} is mandatory", allowed_keys[0])))
+                 } else if !m.iter().all(|(k, _)| allowed_keys.contains(&k.as_str())) {
+                    Err(GetRegistrationReceiptError::InvalidFormat("Invalid named parameter found in request".to_owned()))
+                 } else {
+                    let mut params = Vec::with_capacity(allowed_keys.len());
+                    for k in allowed_keys {
+                        if let Some(v) = m.remove(k) {
+                            params.push(v);
+                        }
+                    }
+
+                    GetRegistrationReceiptParams::try_from(json!(params))
+                }
+            },
+            _ => Err(GetRegistrationReceiptError::InvalidFormat(format!(
+                "Unexpected request format. Expected: tower_id [subscription_start] [subscription_expire]. Received: '{value}'"
+            ))),
+        }
+    }
+}
+
 /// Data associated with a commitment revocation. Represents the data sent by CoreLN through the `commitment_revocation` hook.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CommitmentRevocation {

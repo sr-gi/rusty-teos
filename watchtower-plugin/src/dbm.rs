@@ -3,7 +3,7 @@ use std::iter::FromIterator;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use rusqlite::{params, Connection, Error as SqliteError};
+use rusqlite::{params, Connection, Error as SqliteError, ToSql};
 
 use bitcoin::secp256k1::SecretKey;
 
@@ -209,36 +209,43 @@ impl DBM {
         Some(tower)
     }
 
-    /// Loads the latest registration receipt for a given tower.
-    ///
+    /// Loads the registration receipt(s) for a given tower in the given subscription range.
+    /// If no range is given, then loads the latest receipt
     /// Latests is determined by the one with the `subscription_expiry` further into the future.
     pub fn load_registration_receipt(
         &self,
         tower_id: TowerId,
         user_id: UserId,
-    ) -> Option<RegistrationReceipt> {
-        let mut stmt = self
-            .connection
-            .prepare(
-                "SELECT available_slots, subscription_start, subscription_expiry, signature
-                    FROM registration_receipts 
-                    WHERE tower_id = ?1 AND subscription_expiry = (SELECT MAX(subscription_expiry) 
-                        FROM registration_receipts 
-                        WHERE tower_id = ?1)",
-            )
-            .unwrap();
+        subscription_start: Option<u32>,
+        subscription_expiry: Option<u32>,
+    ) -> Option<Vec<RegistrationReceipt>> {
+        let mut query = "SELECT available_slots, subscription_start, subscription_expiry, signature FROM registration_receipts WHERE tower_id = ?1".to_string();
 
-        stmt.query_row([tower_id.to_vec()], |row| {
-            let slots: u32 = row.get(0).unwrap();
-            let start: u32 = row.get(1).unwrap();
-            let expiry: u32 = row.get(2).unwrap();
-            let signature: String = row.get(3).unwrap();
+        let tower_id_encoded = tower_id.to_vec();
+        let mut params: Vec<&dyn ToSql> = vec![&tower_id_encoded];
+
+        if subscription_expiry.is_none() {
+            query.push_str(" AND subscription_expiry = (SELECT MAX(subscription_expiry) FROM registration_receipts WHERE tower_id = ?1)")
+        } else {
+            query.push_str(" AND subscription_start>=?2 AND subscription_expiry <=?3");
+            params.push(&subscription_start);
+            params.push(&subscription_expiry)
+        }
+        let mut stmt = self.connection.prepare(&query).unwrap();
+
+        stmt.query_map(params.as_slice(), |row| {
+            let slots: u32 = row.get(0)?;
+            let start: u32 = row.get(1)?;
+            let expiry: u32 = row.get(2)?;
+            let signature: String = row.get(3)?;
 
             Ok(RegistrationReceipt::with_signature(
                 user_id, slots, start, expiry, signature,
             ))
         })
-        .ok()
+        .unwrap()
+        .map(|r| r.ok())
+        .collect()
     }
 
     /// Removes a tower record from the database.
@@ -725,34 +732,49 @@ mod tests {
         let tower_id = get_random_user_id();
         let net_addr = "talaia.watch";
         let receipt = get_random_registration_receipt();
+        let subscription_start = Some(receipt.subscription_start());
+        let subscription_expiry = Some(receipt.subscription_expiry());
 
         // Check the receipt was stored
         dbm.store_tower_record(tower_id, net_addr, &receipt)
             .unwrap();
         assert_eq!(
-            dbm.load_registration_receipt(tower_id, receipt.user_id())
-                .unwrap(),
+            dbm.load_registration_receipt(
+                tower_id,
+                receipt.user_id(),
+                subscription_start,
+                subscription_expiry
+            )
+            .unwrap()[0],
             receipt
         );
 
-        // Add another receipt for the same tower with a higher expiry and check this last one is loaded
+        // Add another receipt for the same tower with a higher expiry and check that output gives vector of both receipts
         let middle_receipt = get_registration_receipt_from_previous(&receipt);
         let latest_receipt = get_registration_receipt_from_previous(&middle_receipt);
+
+        let latest_subscription_expiry = Some(latest_receipt.subscription_expiry());
 
         dbm.store_tower_record(tower_id, net_addr, &latest_receipt)
             .unwrap();
         assert_eq!(
-            dbm.load_registration_receipt(tower_id, latest_receipt.user_id())
-                .unwrap(),
-            latest_receipt
+            dbm.load_registration_receipt(
+                tower_id,
+                latest_receipt.user_id(),
+                subscription_start,
+                latest_subscription_expiry
+            )
+            .unwrap(),
+            vec![receipt, latest_receipt.clone()]
         );
 
-        // Add a final one with a lower expiry and check the last is still loaded
+        // Add a final one with a lower expiry and check if the lastest receipt is loaded when boundry
+        // params are not passed
         dbm.store_tower_record(tower_id, net_addr, &middle_receipt)
             .unwrap();
         assert_eq!(
-            dbm.load_registration_receipt(tower_id, latest_receipt.user_id())
-                .unwrap(),
+            dbm.load_registration_receipt(tower_id, latest_receipt.user_id(), None, None)
+                .unwrap()[0],
             latest_receipt
         );
     }
@@ -765,13 +787,20 @@ mod tests {
         let tower_id = get_random_user_id();
         let net_addr = "talaia.watch";
         let receipt = get_random_registration_receipt();
+        let subscription_start = Some(receipt.subscription_start());
+        let subscription_expiry = Some(receipt.subscription_expiry());
 
         // Store it once
         dbm.store_tower_record(tower_id, net_addr, &receipt)
             .unwrap();
         assert_eq!(
-            dbm.load_registration_receipt(tower_id, receipt.user_id())
-                .unwrap(),
+            dbm.load_registration_receipt(
+                tower_id,
+                receipt.user_id(),
+                subscription_start,
+                subscription_expiry
+            )
+            .unwrap()[0],
             receipt
         );
 

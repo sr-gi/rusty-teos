@@ -18,7 +18,9 @@ use teos_common::protos as common_msgs;
 use teos_common::TowerId;
 use teos_common::{cryptography, errors};
 
-use watchtower_plugin::convert::{CommitmentRevocation, GetAppointmentParams, RegisterParams};
+use watchtower_plugin::convert::{
+    CommitmentRevocation, GetAppointmentParams, GetRegistrationReceiptParams, RegisterParams,
+};
 use watchtower_plugin::net::http::{
     self, get_request, post_request, process_post_response, AddAppointmentError, ApiResponse,
     RequestError,
@@ -127,22 +129,33 @@ async fn register(
     Ok(json!(receipt))
 }
 
-/// Gets the latest registration receipt from the client to a given tower (if it exists).
-///
+/// Gets the registration receipt(s) from the client to a given tower (if it exists) in the given
+/// range. If no range is given, then gets the latest registration receipt.
 /// This is pulled from the database
 async fn get_registration_receipt(
     plugin: Plugin<Arc<Mutex<WTClient>>>,
     v: serde_json::Value,
 ) -> Result<serde_json::Value, Error> {
-    let tower_id = TowerId::try_from(v).map_err(|x| anyhow!(x))?;
+    let params = GetRegistrationReceiptParams::try_from(v).map_err(|x| anyhow!(x))?;
+    let tower_id = params.tower_id;
+    let subscription_start = params.subscription_start;
+    let subscription_expiry = params.subscription_expiry;
     let state = plugin.state().lock().unwrap();
 
-    if let Some(response) = state.get_registration_receipt(tower_id) {
-        Ok(json!(response))
+    let response =
+        state.get_registration_receipt(tower_id, subscription_start, subscription_expiry);
+    if response.clone().unwrap().is_empty() {
+        if state.towers.contains_key(&tower_id) {
+            Err(anyhow!(
+                "No registration receipt found for {tower_id} on the given range"
+            ))
+        } else {
+            Err(anyhow!(
+                "Cannot find {tower_id} within the known towers. Have you registered?"
+            ))
+        }
     } else {
-        Err(anyhow!(
-            "Cannot find {tower_id} within the known towers. Have you registered?"
-        ))
+        Ok(json!(response))
     }
 }
 
