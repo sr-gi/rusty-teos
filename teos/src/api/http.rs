@@ -845,7 +845,7 @@ mod tests_methods {
             .add_dummy_tracker_to_responder(&tracker);
 
         // Try to add it via the http API
-        let appointment = generate_dummy_appointment(Some(&dispute_tx.txid())).inner;
+        let appointment = generate_dummy_appointment(Some(&dispute_tx.compute_txid())).inner;
         let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
         assert_eq!(
             check_api_error(

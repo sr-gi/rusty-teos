@@ -6,7 +6,7 @@
 - `bitcoind`
 
 ### Minimum Supported Rust Version (MSRV)
-FIXME: Define MSRV
+Refer to [toolchain](./rust-toolchain.toml)
 
 ### Installing Rust
 Refer to [rust-lang.org](https://www.rust-lang.org/tools/install).

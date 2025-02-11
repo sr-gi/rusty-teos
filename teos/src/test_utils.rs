@@ -17,22 +17,24 @@ use jsonrpc_http_server::{CloseHandle, Server, ServerBuilder};
 
 use bitcoincore_rpc::{Auth, Client as BitcoindClient};
 
-use bitcoin::blockdata::block::{Block, BlockHeader};
+use bitcoin::block::Block;
 use bitcoin::blockdata::constants::genesis_block;
-use bitcoin::blockdata::script::{Builder, Script};
+use bitcoin::blockdata::script::{Builder, ScriptBuf};
 use bitcoin::blockdata::transaction::{OutPoint, Transaction, TxIn, TxOut};
 use bitcoin::hash_types::BlockHash;
 use bitcoin::hash_types::Txid;
 use bitcoin::hashes::Hash;
-use bitcoin::network::constants::Network;
-use bitcoin::util::hash::bitcoin_merkle_root;
-use bitcoin::util::uint::Uint256;
+use bitcoin::merkle_tree::calculate_root;
+use bitcoin::pow::Work;
+use bitcoin::Amount;
+use bitcoin::Network;
 use bitcoin::Witness;
 use lightning_block_sync::poll::{
     ChainPoller, Poll, Validate, ValidatedBlock, ValidatedBlockHeader,
 };
 use lightning_block_sync::{
-    AsyncBlockSourceResult, BlockHeaderData, BlockSource, BlockSourceError, UnboundedCache,
+    AsyncBlockSourceResult, BlockData, BlockHeaderData, BlockSource, BlockSourceError,
+    UnboundedCache,
 };
 
 use teos_common::constants::IRREVOCABLY_RESOLVED;
@@ -153,8 +155,11 @@ impl Blockchain {
     fn at_height_unvalidated(&self, height: usize) -> BlockHeaderData {
         assert!(!self.blocks.is_empty());
         assert!(height < self.blocks.len());
+        let height_bytes = height.to_be_bytes();
+        let mut padded_bytes = [0u8; 32];
+        padded_bytes[32 - height_bytes.len()..].copy_from_slice(&height_bytes);
         BlockHeaderData {
-            chainwork: self.blocks[0].header.work() + Uint256::from_u64(height as u64).unwrap(),
+            chainwork: self.blocks[0].header.work() + Work::from_be_bytes(padded_bytes),
             height: height as u32,
             header: self.blocks[height].header,
         }
@@ -184,7 +189,8 @@ impl Blockchain {
     }
 
     pub fn generate(&mut self, txs: Option<Vec<Transaction>>) -> Block {
-        let bits = BlockHeader::compact_target_from_u256(&Uint256::from_be_bytes([0xff; 32]));
+        // FIXME: replace this magic number with something meaningul
+        let bits = bitcoin::CompactTarget::from_consensus(553713663);
 
         let prev_block = self.blocks.last().unwrap();
         let prev_blockhash = prev_block.block_hash();
@@ -199,17 +205,17 @@ impl Blockchain {
             }
             None => vec![get_random_tx()],
         };
-        let hashes = txdata.iter().map(|obj| obj.txid().as_hash());
-        let mut header = BlockHeader {
-            version: 0,
+        let hashes = txdata.iter().map(|obj| obj.compute_txid().to_raw_hash());
+        let mut header = bitcoin::block::Header {
+            version: bitcoin::block::Version::from_consensus(0),
             prev_blockhash,
-            merkle_root: bitcoin_merkle_root(hashes).unwrap().into(),
+            merkle_root: calculate_root(hashes).unwrap().into(),
             time,
             bits,
             nonce: 0,
         };
 
-        while header.validate_pow(&header.target()).is_err() {
+        while header.validate_pow(header.target()).is_err() {
             header.nonce += 1;
         }
 
@@ -245,7 +251,7 @@ impl BlockSource for Blockchain {
         })
     }
 
-    fn get_block<'a>(&'a self, header_hash: &'a BlockHash) -> AsyncBlockSourceResult<'a, Block> {
+    fn get_block<'a>(&'a self, header_hash: &'a BlockHash) -> AsyncBlockSourceResult<BlockData> {
         Box::pin(async move {
             for (height, block) in self.blocks.iter().enumerate() {
                 if block.header.block_hash() == *header_hash {
@@ -254,8 +260,7 @@ impl BlockSource for Blockchain {
                             return Err(BlockSourceError::persistent("block not found"));
                         }
                     }
-
-                    return Ok(block.clone());
+                    return Ok(BlockData::FullBlock(block.clone()));
                 }
             }
             Err(BlockSourceError::transient("block not found"))
@@ -289,20 +294,20 @@ pub(crate) fn get_random_tx() -> Transaction {
     let prev_txid_bytes = get_random_bytes(32);
 
     Transaction {
-        version: 2,
-        lock_time: 0,
+        version: bitcoin::transaction::Version(2),
+        lock_time: bitcoin::locktime::absolute::LockTime::from_height(0).unwrap(),
         input: vec![TxIn {
             previous_output: OutPoint::new(
                 Txid::from_slice(&prev_txid_bytes).unwrap(),
                 rng.gen_range(0..200),
             ),
-            script_sig: Script::new(),
+            script_sig: ScriptBuf::new(),
             witness: Witness::new(),
-            sequence: 0,
+            sequence: bitcoin::Sequence(0),
         }],
         output: vec![TxOut {
             script_pubkey: Builder::new().push_int(1).into_script(),
-            value: rng.gen_range(0..21000000000),
+            value: Amount::from_sat(rng.gen_range(0..21_000_000_000)),
         }],
     }
 }
@@ -405,7 +410,7 @@ pub(crate) async fn create_responder(
     let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
     let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, height);
 
-    Responder::new(&last_n_blocks, height, carrier, gatekeeper, dbm)
+    Responder::new(last_n_blocks.as_slice(), height, carrier, gatekeeper, dbm)
 }
 
 pub(crate) async fn create_watcher(
@@ -424,7 +429,7 @@ pub(crate) async fn create_watcher(
         Watcher::new(
             gatekeeper,
             responder,
-            &last_n_blocks,
+            last_n_blocks.as_slice(),
             chain.get_block_count(),
             tower_sk,
             tower_id,

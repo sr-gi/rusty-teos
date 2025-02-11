@@ -80,17 +80,17 @@ impl Carrier {
     pub(crate) fn send_transaction(&mut self, tx: &Transaction) -> ConfirmationStatus {
         self.hang_until_bitcoind_reachable();
 
-        if let Some(receipt) = self.issued_receipts.get(&tx.txid()) {
-            log::info!("Transaction already sent: {}", tx.txid());
+        if let Some(receipt) = self.issued_receipts.get(&tx.compute_txid()) {
+            log::info!("Transaction already sent: {}", tx.compute_txid());
             return *receipt;
         }
 
-        log::info!("Pushing transaction to the network: {}", tx.txid());
+        log::info!("Pushing transaction to the network: {}", tx.compute_txid());
         let receipt = match self.bitcoin_cli.send_raw_transaction(tx) {
             Ok(_) => {
                 // Here the transaction could, potentially, have been in mempool before the current height.
                 // This shouldn't really matter though.
-                log::info!("Transaction successfully delivered: {}", tx.txid());
+                log::info!("Transaction successfully delivered: {}", tx.compute_txid());
                 ConfirmationStatus::InMempoolSince(self.block_height)
             }
             Err(JsonRpcError(RpcError(rpcerr))) => match rpcerr.code {
@@ -106,7 +106,7 @@ impl Carrier {
                 rpc_errors::RPC_VERIFY_ALREADY_IN_CHAIN => {
                     log::info!(
                         "Transaction was confirmed long ago, not keeping track of it: {}",
-                        tx.txid()
+                        tx.compute_txid()
                     );
 
                     // Given we are not using txindex, if a transaction bounces we cannot get its confirmation count. However, [send_transaction] is guarded by
@@ -117,7 +117,7 @@ impl Carrier {
                 rpc_errors::RPC_DESERIALIZATION_ERROR => {
                     // Adding this here just for completeness. We should never end up here. The Carrier only sends txs handed by the Responder,
                     // who receives them from the Watcher, who checks that the tx can be properly deserialized.
-                    log::info!("Transaction cannot be deserialized: {}", tx.txid());
+                    log::info!("Transaction cannot be deserialized: {}", tx.compute_txid());
                     ConfirmationStatus::Rejected(rpc_errors::RPC_DESERIALIZATION_ERROR)
                 }
                 _ => {
@@ -139,7 +139,7 @@ impl Carrier {
             }
         };
 
-        self.issued_receipts.insert(tx.txid(), receipt);
+        self.issued_receipts.insert(tx.compute_txid(), receipt);
 
         receipt
     }
@@ -217,7 +217,7 @@ mod tests {
         // Lets add some dummy data into the cache
         for i in 0..10 {
             carrier.issued_receipts.insert(
-                get_random_tx().txid(),
+                get_random_tx().compute_txid(),
                 ConfirmationStatus::ConfirmedIn(start_height - i),
             );
         }
@@ -243,7 +243,7 @@ mod tests {
         assert_eq!(r, ConfirmationStatus::InMempoolSince(start_height));
 
         // Check the receipt is on the cache
-        assert_eq!(carrier.issued_receipts.get(&tx.txid()).unwrap(), &r);
+        assert_eq!(carrier.issued_receipts.get(&tx.compute_txid()).unwrap(), &r);
     }
 
     #[test]
@@ -261,7 +261,7 @@ mod tests {
         assert_eq!(r, ConfirmationStatus::InMempoolSince(start_height));
 
         // Check the receipt is on the cache
-        assert_eq!(carrier.issued_receipts.get(&tx.txid()).unwrap(), &r);
+        assert_eq!(carrier.issued_receipts.get(&tx.compute_txid()).unwrap(), &r);
     }
 
     #[test]
@@ -284,7 +284,7 @@ mod tests {
         );
 
         // Check the receipt is on the cache
-        assert_eq!(carrier.issued_receipts.get(&tx.txid()).unwrap(), &r);
+        assert_eq!(carrier.issued_receipts.get(&tx.compute_txid()).unwrap(), &r);
     }
 
     #[test]
@@ -306,7 +306,7 @@ mod tests {
         );
 
         // Check the receipt is on the cache
-        assert_eq!(carrier.issued_receipts.get(&tx.txid()).unwrap(), &r);
+        assert_eq!(carrier.issued_receipts.get(&tx.compute_txid()).unwrap(), &r);
     }
 
     #[test]
@@ -326,7 +326,7 @@ mod tests {
         assert_eq!(r, ConfirmationStatus::IrrevocablyResolved);
 
         // Check the receipt is on the cache
-        assert_eq!(carrier.issued_receipts.get(&tx.txid()).unwrap(), &r);
+        assert_eq!(carrier.issued_receipts.get(&tx.compute_txid()).unwrap(), &r);
     }
 
     #[test]
@@ -348,7 +348,7 @@ mod tests {
         );
 
         // Check the receipt is on the cache
-        assert_eq!(carrier.issued_receipts.get(&tx.txid()).unwrap(), &r);
+        assert_eq!(carrier.issued_receipts.get(&tx.compute_txid()).unwrap(), &r);
     }
 
     #[test]
@@ -389,7 +389,9 @@ mod tests {
         start_server(bitcoind_mock.server);
 
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
-        let txid = Txid::from_hex(TXID_HEX).unwrap();
+        let vec = Vec::from_hex(TXID_HEX).unwrap();
+        let hash: bitcoin::hashes::sha256d::Hash = bitcoin::hashes::Hash::from_slice(&vec).unwrap();
+        let txid = Txid::from(hash);
         assert!(carrier.in_mempool(&txid));
     }
 
@@ -402,7 +404,9 @@ mod tests {
         start_server(bitcoind_mock.server);
 
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
-        let txid = Txid::from_hex(TXID_HEX).unwrap();
+        let vec = Vec::from_hex(TXID_HEX).unwrap();
+        let hash: bitcoin::hashes::sha256d::Hash = bitcoin::hashes::Hash::from_slice(&vec).unwrap();
+        let txid = Txid::from(hash);
         assert!(!carrier.in_mempool(&txid));
     }
 
@@ -417,7 +421,9 @@ mod tests {
         start_server(bitcoind_mock.server);
 
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
-        let txid = Txid::from_hex(TXID_HEX).unwrap();
+        let vec = Vec::from_hex(TXID_HEX).unwrap();
+        let hash: bitcoin::hashes::sha256d::Hash = bitcoin::hashes::Hash::from_slice(&vec).unwrap();
+        let txid = Txid::from(hash);
         assert!(!carrier.in_mempool(&txid));
     }
 
@@ -431,7 +437,9 @@ mod tests {
         start_server(bitcoind_mock.server);
 
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, start_height);
-        let txid = Txid::from_hex(TXID_HEX).unwrap();
+        let vec = Vec::from_hex(TXID_HEX).unwrap();
+        let hash: bitcoin::hashes::sha256d::Hash = bitcoin::hashes::Hash::from_slice(&vec).unwrap();
+        let txid = Txid::from(hash);
         assert!(!carrier.in_mempool(&txid));
     }
 
@@ -444,7 +452,9 @@ mod tests {
         let start_height = START_HEIGHT as u32;
         let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable.clone(), start_height);
 
-        let txid = Txid::from_hex(TXID_HEX).unwrap();
+        let vec = Vec::from_hex(TXID_HEX).unwrap();
+        let hash: bitcoin::hashes::sha256d::Hash = bitcoin::hashes::Hash::from_slice(&vec).unwrap();
+        let txid = Txid::from(hash);
         let delay = std::time::Duration::new(3, 0);
 
         thread::spawn(move || {

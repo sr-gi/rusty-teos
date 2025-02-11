@@ -689,7 +689,7 @@ impl DBM {
             // DISCUSS: Should we store the txids to avoid pulling raw txs and deserializing then hashing them.
             let penalty_txid = consensus::deserialize::<bitcoin::Transaction>(&raw_penalty_tx)
                 .unwrap()
-                .txid();
+                .compute_txid();
             summaries.insert(
                 UUID::from_slice(&raw_uuid).unwrap(),
                 PenaltySummary::new(
@@ -704,7 +704,7 @@ impl DBM {
     /// Stores the last known block into the database.
     pub(crate) fn store_last_known_block(&self, block_hash: &BlockHash) -> Result<(), Error> {
         let query = "INSERT OR REPLACE INTO last_known_block (id, block_hash) VALUES (0, ?)";
-        self.store_data(query, params![block_hash.to_vec()])
+        self.store_data(query, params![block_hash.to_byte_array().to_vec()])
     }
 
     /// Loads the last known block from the database.
@@ -1130,7 +1130,7 @@ mod tests {
         let dbm = DBM::in_memory().unwrap();
         let mut appointments = HashMap::new();
         let dispute_tx = get_random_tx();
-        let dispute_txid = dispute_tx.txid();
+        let dispute_txid = dispute_tx.compute_txid();
         let locator = Locator::new(dispute_txid);
 
         for i in 1..11 {
@@ -1316,7 +1316,7 @@ mod tests {
 
         let user = UserInfo::new(AVAILABLE_SLOTS, SUBSCRIPTION_START, SUBSCRIPTION_EXPIRY);
         let dispute_tx = get_random_tx();
-        let dispute_txid = dispute_tx.txid();
+        let dispute_txid = dispute_tx.compute_txid();
         let mut uuids = HashSet::new();
 
         // Add ten appointments triggered by the same locator.
@@ -1336,7 +1336,7 @@ mod tests {
             let user_id = get_random_user_id();
             dbm.store_user(user_id, &user).unwrap();
 
-            let dispute_txid = get_random_tx().txid();
+            let dispute_txid = get_random_tx().compute_txid();
             let (uuid, appointment) =
                 generate_dummy_appointment_with_user(user_id, Some(&dispute_txid));
             dbm.store_appointment(uuid, &appointment).unwrap();
@@ -1516,7 +1516,7 @@ mod tests {
         let dbm = DBM::in_memory().unwrap();
         let mut trackers = HashMap::new();
         let dispute_tx = get_random_tx();
-        let dispute_txid = dispute_tx.txid();
+        let dispute_txid = dispute_tx.compute_txid();
         let locator = Locator::new(dispute_txid);
         let status = ConfirmationStatus::InMempoolSince(42);
 
@@ -1700,8 +1700,10 @@ mod tests {
             let tracker = get_random_tracker(user_id, status);
             dbm.store_tracker(uuid, &tracker).unwrap();
 
-            penalties_summaries
-                .insert(uuid, PenaltySummary::new(tracker.penalty_tx.txid(), status));
+            penalties_summaries.insert(
+                uuid,
+                PenaltySummary::new(tracker.penalty_tx.compute_txid(), status),
+            );
         }
 
         assert_eq!(dbm.load_penalties_summaries(), penalties_summaries);

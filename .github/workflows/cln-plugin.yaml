@@ -8,7 +8,7 @@ on:
 
 env:
   bitcoind_version: "27.0"
-  cln_version: "24.02.2"
+  cln_version: "24.11.1"
 
 jobs:
   cache-cln:

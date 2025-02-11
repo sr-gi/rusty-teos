@@ -297,7 +297,7 @@ impl chain::Listen for Gatekeeper {
     /// This is mainly used to keep track of time and expire / outdate subscriptions when needed.
     fn filtered_block_connected(
         &self,
-        header: &bitcoin::BlockHeader,
+        header: &bitcoin::block::Header,
         _: &chain::transaction::TransactionData,
         height: u32,
     ) {
@@ -324,7 +324,7 @@ impl chain::Listen for Gatekeeper {
     }
 
     /// Handles reorgs in the [Gatekeeper]. Simply updates the last_known_block_height.
-    fn block_disconnected(&self, header: &bitcoin::BlockHeader, height: u32) {
+    fn block_disconnected(&self, header: &bitcoin::block::Header, height: u32) {
         log::warn!("Block disconnected: {}", header.block_hash());
         // There's nothing to be done here but updating the last known block
         self.last_known_block_height

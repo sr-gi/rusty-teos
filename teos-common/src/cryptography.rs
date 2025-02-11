@@ -1,10 +1,9 @@
 //! Cryptography module, used in the interaction between users and towers.
 
-use rand::distributions::Uniform;
-use rand::Rng;
-
 use chacha20poly1305::aead::{Aead, NewAead};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
+use rand::distributions::Uniform;
+use rand::Rng;
 
 use bitcoin::consensus;
 use bitcoin::hashes::{sha256, Hash};
@@ -21,7 +20,7 @@ pub enum DecryptingError {
 
 /// Shadows [message_signing::sign].
 pub fn sign(msg: &[u8], sk: &SecretKey) -> Result<String, Error> {
-    message_signing::sign(msg, sk)
+    Ok(message_signing::sign(msg, sk))
 }
 
 /// Shadows [message_signing::verify].
@@ -47,8 +46,8 @@ pub fn encrypt(
 ) -> Result<Vec<u8>, chacha20poly1305::aead::Error> {
     // Defaults is [0; 12]
     let nonce = Nonce::default();
-    let _k = sha256::Hash::hash(secret);
-    let key = Key::from_slice(&_k);
+    let k = sha256::Hash::hash(secret.as_byte_array());
+    let key = Key::from_slice(k.as_byte_array());
 
     let cypher = ChaCha20Poly1305::new(key);
     cypher.encrypt(&nonce, consensus::serialize(message).as_ref())
@@ -64,8 +63,8 @@ pub fn encrypt(
 pub fn decrypt(encrypted_blob: &[u8], secret: &Txid) -> Result<Transaction, DecryptingError> {
     // Defaults is [0; 12]
     let nonce = Nonce::default();
-    let _k = sha256::Hash::hash(secret);
-    let key = Key::from_slice(&_k);
+    let k = sha256::Hash::hash(secret.as_byte_array());
+    let key = Key::from_slice(k.as_byte_array());
 
     let cypher = ChaCha20Poly1305::new(key);
 
@@ -95,6 +94,8 @@ pub fn get_random_keypair() -> (SecretKey, PublicKey) {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
     use bitcoin::consensus;
     use bitcoin::hashes::hex::FromHex;
@@ -108,8 +109,8 @@ mod tests {
         let expected_enc_blob = Vec::from_hex(ENC_BLOB).unwrap();
         let tx_bytes = Vec::from_hex(HEX_TX).unwrap();
 
-        let tx = consensus::deserialize(&tx_bytes).unwrap();
-        let txid = Txid::from_hex(HEX_TXID).unwrap();
+        let tx: Transaction = consensus::deserialize(&tx_bytes).unwrap();
+        let txid = bitcoin::Txid::from_str(HEX_TXID).unwrap();
         assert_eq!(encrypt(&tx, &txid).unwrap(), expected_enc_blob);
     }
 
@@ -118,7 +119,7 @@ mod tests {
         let expected_tx = consensus::deserialize(&Vec::from_hex(HEX_TX).unwrap()).unwrap();
 
         let encrypted_blob = Vec::from_hex(ENC_BLOB).unwrap();
-        let txid = Txid::from_hex(HEX_TXID).unwrap();
+        let txid = bitcoin::Txid::from_str(HEX_TXID).unwrap();
         assert_eq!(decrypt(&encrypted_blob, &txid).unwrap(), expected_tx);
     }
 }

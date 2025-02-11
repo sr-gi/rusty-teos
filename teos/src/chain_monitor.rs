@@ -26,7 +26,7 @@ where
 {
     /// A bitcoin client to poll best tips from.
     spv_client: SpvClient<'a, P, C, L>,
-    /// The lat known block header by the [ChainMonitor].
+    /// The last known block header by the [ChainMonitor].
     last_known_block_header: ValidatedBlockHeader,
     /// A [DBM] (database manager) instance. Used to persist block data into disk.
     dbm: Arc<Mutex<DBM>>,
@@ -135,8 +135,8 @@ mod tests {
     use std::iter::FromIterator;
     use std::thread;
 
-    use bitcoin::network::constants::Network;
     use bitcoin::BlockHash;
+    use bitcoin::Network;
     use lightning_block_sync::{poll::ChainPoller, SpvClient, UnboundedCache};
 
     use crate::test_utils::{Blockchain, START_HEIGHT};
@@ -158,7 +158,7 @@ mod tests {
     impl chain::Listen for DummyListener {
         fn filtered_block_connected(
             &self,
-            header: &bitcoin::BlockHeader,
+            header: &bitcoin::block::Header,
             _: &chain::transaction::TransactionData,
             _: u32,
         ) {
@@ -167,7 +167,7 @@ mod tests {
                 .insert(header.block_hash());
         }
 
-        fn block_disconnected(&self, header: &bitcoin::BlockHeader, _: u32) {
+        fn block_disconnected(&self, header: &bitcoin::block::Header, _: u32) {
             self.disconnected_blocks
                 .borrow_mut()
                 .insert(header.block_hash());

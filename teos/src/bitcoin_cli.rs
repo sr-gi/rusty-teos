@@ -9,20 +9,19 @@
  * at your option.
 */
 
+use base64::{engine::general_purpose::URL_SAFE, Engine as _};
 use std::convert::TryInto;
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use bitcoin::base64;
 use bitcoin::hash_types::{BlockHash, Txid};
-use bitcoin::hashes::hex::ToHex;
-use bitcoin::{Block, Transaction};
-use bitcoincore_rpc::Auth;
+use bitcoin::Transaction;
+use bitcoincore_rpc::{Auth, RawTx};
 use lightning::util::ser::Writeable;
 use lightning_block_sync::http::{HttpEndpoint, JsonResponse};
 use lightning_block_sync::rpc::RpcClient;
-use lightning_block_sync::{AsyncBlockSourceResult, BlockHeaderData, BlockSource};
+use lightning_block_sync::{AsyncBlockSourceResult, BlockData, BlockHeaderData, BlockSource};
 
 /// A simple implementation of a bitcoind client (`bitcoin-cli`) with the minimal functionality required by the tower.
 pub struct BitcoindClient<'a> {
@@ -52,7 +51,10 @@ impl BlockSource for &BitcoindClient<'_> {
     }
 
     /// Gets a block given its hash.
-    fn get_block<'a>(&'a self, header_hash: &'a BlockHash) -> AsyncBlockSourceResult<'a, Block> {
+    fn get_block<'a>(
+        &'a self,
+        header_hash: &'a BlockHash,
+    ) -> AsyncBlockSourceResult<'a, BlockData> {
         Box::pin(async move {
             let rpc = self.bitcoind_rpc_client.lock().await;
             rpc.get_block(header_hash).await
@@ -101,8 +103,8 @@ impl<'a> BitcoindClient<'a> {
             }
         }?;
 
-        let rpc_credentials = base64::encode(&format!("{}:{}", rpc_user, rpc_password));
-        let bitcoind_rpc_client = RpcClient::new(&rpc_credentials, http_endpoint)?;
+        let rpc_credentials = URL_SAFE.encode(format!("{}:{}", rpc_user, rpc_password));
+        let bitcoind_rpc_client = RpcClient::new(&rpc_credentials, http_endpoint);
 
         let client = Self {
             bitcoind_rpc_client: Arc::new(Mutex::new(bitcoind_rpc_client)),
@@ -129,8 +131,8 @@ impl<'a> BitcoindClient<'a> {
     /// Gets a fresh RPC client.
     pub fn get_new_rpc_client(&self) -> std::io::Result<RpcClient> {
         let http_endpoint = HttpEndpoint::for_host(self.host.to_owned()).with_port(self.port);
-        let rpc_credentials = base64::encode(&format!("{}:{}", self.rpc_user, self.rpc_password));
-        RpcClient::new(&rpc_credentials, http_endpoint)
+        let rpc_credentials = URL_SAFE.encode(format!("{}:{}", self.rpc_user, self.rpc_password));
+        Ok(RpcClient::new(&rpc_credentials, http_endpoint))
     }
 
     /// Gets the hash of the chain tip and its height.
@@ -146,7 +148,7 @@ impl<'a> BitcoindClient<'a> {
     pub async fn send_raw_transaction(&self, raw_tx: &Transaction) -> Result<Txid, std::io::Error> {
         let rpc = self.bitcoind_rpc_client.lock().await;
 
-        let raw_tx_json = serde_json::json!(raw_tx.encode().to_hex());
+        let raw_tx_json = serde_json::json!(raw_tx.encode().raw_hex());
         rpc.call_method::<Txid>("sendrawtransaction", &[raw_tx_json])
             .await
     }
@@ -155,7 +157,7 @@ impl<'a> BitcoindClient<'a> {
     pub async fn get_raw_transaction(&self, txid: &Txid) -> Result<Transaction, std::io::Error> {
         let rpc = self.bitcoind_rpc_client.lock().await;
 
-        let txid_hex = serde_json::json!(txid.encode().to_hex());
+        let txid_hex = serde_json::json!(txid.encode().raw_hex());
         rpc.call_method::<Transaction>("getrawtransaction", &[txid_hex])
             .await
     }

@@ -1239,9 +1239,15 @@ mod tests {
                 MAX_ELAPSED_TIME as f64 + MAX_RUN_TIME,
             ))
             .await;
-            let state = wt_client.lock().unwrap();
-            assert!(state.get_retrier_status(&tower_id).unwrap().is_idle());
 
+            wait_until!(wt_client
+                .lock()
+                .unwrap()
+                .get_retrier_status(&tower_id)
+                .unwrap()
+                .is_idle());
+
+            let state = wt_client.lock().unwrap();
             let tower = state.towers.get(&tower_id).unwrap();
             assert!(tower.pending_appointments.contains(&appointment.locator));
             assert_eq!(tower.status, TowerStatus::Unreachable);

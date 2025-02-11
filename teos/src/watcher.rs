@@ -4,8 +4,9 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+use bitcoin::block::Header;
 use bitcoin::secp256k1::SecretKey;
-use bitcoin::{BlockHeader, Transaction};
+use bitcoin::Transaction;
 use lightning::chain;
 use lightning_block_sync::poll::ValidatedBlock;
 
@@ -261,7 +262,7 @@ impl Watcher {
             "Trigger for locator {} found in cache",
             appointment.locator()
         );
-        match cryptography::decrypt(appointment.encrypted_blob(), &dispute_tx.txid()) {
+        match cryptography::decrypt(appointment.encrypted_blob(), &dispute_tx.compute_txid()) {
             Ok(penalty_tx) => {
                 // Data needs to be added the database straightaway since appointments are
                 // FKs to trackers. If handle breach fails, data will be deleted later.
@@ -383,7 +384,10 @@ impl Watcher {
             let uuids = self.dbm.lock().unwrap().load_uuids(locator);
             for uuid in uuids {
                 let appointment = self.dbm.lock().unwrap().load_appointment(uuid).unwrap();
-                match cryptography::decrypt(appointment.encrypted_blob(), &dispute_tx.txid()) {
+                match cryptography::decrypt(
+                    appointment.encrypted_blob(),
+                    &dispute_tx.compute_txid(),
+                ) {
                     Ok(penalty_tx) => {
                         if let ConfirmationStatus::Rejected(_) = self.responder.handle_breach(
                             uuid,
@@ -493,7 +497,7 @@ impl chain::Listen for Watcher {
     /// told by the [Gatekeeper].
     fn filtered_block_connected(
         &self,
-        header: &BlockHeader,
+        header: &Header,
         txdata: &chain::transaction::TransactionData,
         height: u32,
     ) {
@@ -501,7 +505,7 @@ impl chain::Listen for Watcher {
 
         let locator_tx_map = txdata
             .iter()
-            .map(|(_, tx)| (Locator::new(tx.txid()), (*tx).clone()))
+            .map(|(_, tx)| (Locator::new(tx.compute_txid()), (*tx).clone()))
             .collect();
 
         self.locator_cache
@@ -522,7 +526,7 @@ impl chain::Listen for Watcher {
     /// Handle reorgs in the [Watcher].
     ///
     /// Fixes the [LocatorCache] by removing the disconnected data and updates the last_known_block_height.
-    fn block_disconnected(&self, header: &BlockHeader, height: u32) {
+    fn block_disconnected(&self, header: &Header, height: u32) {
         log::warn!("Block disconnected: {}", header.block_hash());
         self.locator_cache
             .lock()
@@ -732,7 +736,7 @@ mod tests {
         // If an appointment is already in the Responder, it should bounce
         let dispute_tx = get_random_tx();
         let (uuid, triggered_appointment) =
-            generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
+            generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.compute_txid()));
         let signature =
             cryptography::sign(&triggered_appointment.inner.to_vec(), &user_sk).unwrap();
         let (receipt, slots, expiry) = watcher
@@ -762,7 +766,7 @@ mod tests {
         // If the trigger is already in the cache, the appointment will go straight to the Responder
         let dispute_tx = tip_txs.last().unwrap();
         let (uuid, appointment_in_cache) =
-            generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
+            generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.compute_txid()));
         let user_sig = cryptography::sign(&appointment_in_cache.inner.to_vec(), &user_sk).unwrap();
         let (receipt, slots, expiry) = watcher
             .add_appointment(appointment_in_cache.inner, user_sig.clone())
@@ -779,7 +783,7 @@ mod tests {
         // Wrong penalty
         let dispute_tx = &tip_txs[tip_txs.len() - 2];
         let (uuid, mut invalid_appointment) =
-            generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
+            generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.compute_txid()));
         invalid_appointment.inner.encrypted_blob.reverse();
         let user_sig = cryptography::sign(&invalid_appointment.inner.to_vec(), &user_sk).unwrap();
         let (receipt, slots, expiry) = watcher
@@ -803,7 +807,7 @@ mod tests {
 
         let dispute_tx = &tip_txs[tip_txs.len() - 2];
         let (uuid, invalid_appointment) =
-            generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
+            generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.compute_txid()));
         let user_sig = cryptography::sign(&invalid_appointment.inner.to_vec(), &user_sk).unwrap();
         let (receipt, slots, expiry) = watcher
             .add_appointment(invalid_appointment.inner, user_sig.clone())
@@ -875,7 +879,7 @@ mod tests {
         let (_, user_pk) = get_random_keypair();
         let user_id = UserId(user_pk);
         watcher.register(user_id).unwrap();
-        let dispute_txid = get_random_tx().txid();
+        let dispute_txid = get_random_tx().compute_txid();
 
         let (uuid, appointment) =
             generate_dummy_appointment_with_user(user_id, Some(&dispute_txid));
@@ -917,7 +921,7 @@ mod tests {
 
         let dispute_tx = get_random_tx();
         let (uuid, appointment) =
-            generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
+            generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.compute_txid()));
 
         // Valid triggered appointments should be accepted by the Responder
         assert_eq!(
@@ -937,7 +941,7 @@ mod tests {
         *watcher.responder.get_carrier().lock().unwrap() = carrier;
         let dispute_tx = get_random_tx();
         let (uuid, appointment) =
-            generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
+            generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.compute_txid()));
         assert_eq!(
             watcher.store_triggered_appointment(uuid, &appointment, user_id, &dispute_tx),
             TriggeredAppointment::Rejected,
@@ -965,7 +969,7 @@ mod tests {
         let (watcher, _s) = init_watcher(&mut chain).await;
 
         let dispute_tx = get_random_tx();
-        let appointment = generate_dummy_appointment(Some(&dispute_tx.txid())).inner;
+        let appointment = generate_dummy_appointment(Some(&dispute_tx.compute_txid())).inner;
 
         // If the user cannot be properly identified, the request will fail. This can be simulated by providing a wrong signature
         let wrong_sig = String::from_utf8((0..65).collect()).unwrap();
@@ -1055,7 +1059,7 @@ mod tests {
         // Let's create some locators based on the transactions in the last block
         let locator_tx_map: HashMap<_, _> = (0..10)
             .map(|_| get_random_tx())
-            .map(|tx| (Locator::new(tx.txid()), tx))
+            .map(|tx| (Locator::new(tx.compute_txid()), tx))
             .collect();
 
         let (user_sk, user_pk) = get_random_keypair();
@@ -1067,7 +1071,7 @@ mod tests {
         for (i, (l, tx)) in locator_tx_map.iter().enumerate() {
             // Track some of the these transactions.
             if i % 2 == 0 {
-                let appointment = generate_dummy_appointment(Some(&tx.txid())).inner;
+                let appointment = generate_dummy_appointment(Some(&tx.compute_txid())).inner;
                 let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
                 watcher.add_appointment(appointment, signature).unwrap();
                 breaches.insert(*l, tx.clone());
@@ -1086,7 +1090,7 @@ mod tests {
         // Let's create some locators based on the transactions in the last block
         let breaches: HashMap<_, _> = (0..10)
             .map(|_| get_random_tx())
-            .map(|tx| (Locator::new(tx.txid()), tx))
+            .map(|tx| (Locator::new(tx.compute_txid()), tx))
             .collect();
 
         let (user_sk, user_pk) = get_random_keypair();
@@ -1095,7 +1099,7 @@ mod tests {
 
         // Let the watcher track these breaches.
         for (_, tx) in breaches.iter() {
-            let appointment = generate_dummy_appointment(Some(&tx.txid())).inner;
+            let appointment = generate_dummy_appointment(Some(&tx.compute_txid())).inner;
             let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
             watcher.add_appointment(appointment, signature).unwrap();
         }
@@ -1111,7 +1115,7 @@ mod tests {
         // Let's create some locators based on the transactions in the last block
         let breaches: HashMap<_, _> = (0..10)
             .map(|_| get_random_tx())
-            .map(|tx| (Locator::new(tx.txid()), tx))
+            .map(|tx| (Locator::new(tx.compute_txid()), tx))
             .collect();
 
         let (user_sk, user_pk) = get_random_keypair();
@@ -1122,7 +1126,7 @@ mod tests {
         // Let the watcher track these breaches.
         for (i, (_, tx)) in breaches.iter().enumerate() {
             let (uuid, appointment) =
-                generate_dummy_appointment_with_user(user_id, Some(&tx.txid()));
+                generate_dummy_appointment_with_user(user_id, Some(&tx.compute_txid()));
             let mut appointment = appointment.inner;
             if i % 2 == 0 {
                 // Mal-format some appointments
@@ -1154,7 +1158,7 @@ mod tests {
         // Let's create some locators based on the transactions in the last block
         let breaches: HashMap<_, _> = (0..10)
             .map(|_| get_random_tx())
-            .map(|tx| (Locator::new(tx.txid()), tx))
+            .map(|tx| (Locator::new(tx.compute_txid()), tx))
             .collect();
 
         let (user_sk, user_pk) = get_random_keypair();
@@ -1165,7 +1169,7 @@ mod tests {
         // Let the watcher track these breaches.
         for tx in breaches.values() {
             let (uuid, appointment) =
-                generate_dummy_appointment_with_user(user_id, Some(&tx.txid()));
+                generate_dummy_appointment_with_user(user_id, Some(&tx.compute_txid()));
             let appointment = appointment.inner;
             let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
             watcher.add_appointment(appointment, signature).unwrap();
@@ -1186,7 +1190,7 @@ mod tests {
         // Let's create some locators based on the transactions in the last block
         let breaches: HashMap<_, _> = (0..10)
             .map(|_| get_random_tx())
-            .map(|tx| (Locator::new(tx.txid()), tx))
+            .map(|tx| (Locator::new(tx.compute_txid()), tx))
             .collect();
 
         let (user_sk, user_pk) = get_random_keypair();
@@ -1197,7 +1201,7 @@ mod tests {
         // Let the watcher track these breaches.
         for (i, (_, tx)) in breaches.iter().enumerate() {
             let (uuid, appointment) =
-                generate_dummy_appointment_with_user(user_id, Some(&tx.txid()));
+                generate_dummy_appointment_with_user(user_id, Some(&tx.compute_txid()));
             let mut appointment = appointment.inner;
             if i % 2 == 0 {
                 // Mal-format some appointments, they should be returned as rejected.
@@ -1298,7 +1302,7 @@ mod tests {
         // Check triggers. Add a new appointment and trigger it with valid data.
         let dispute_tx = get_random_tx();
         let (uuid, appointment) =
-            generate_dummy_appointment_with_user(user2_id, Some(&dispute_tx.txid()));
+            generate_dummy_appointment_with_user(user2_id, Some(&dispute_tx.compute_txid()));
         let sig = cryptography::sign(&appointment.inner.to_vec(), &user2_sk).unwrap();
         watcher.add_appointment(appointment.inner, sig).unwrap();
 
@@ -1316,7 +1320,7 @@ mod tests {
         // Checks invalid triggers. Add a new appointment and trigger it with invalid data.
         let dispute_tx = get_random_tx();
         let (uuid, mut appointment) =
-            generate_dummy_appointment_with_user(user2_id, Some(&dispute_tx.txid()));
+            generate_dummy_appointment_with_user(user2_id, Some(&dispute_tx.compute_txid()));
         // Modify the encrypted blob so the data is invalid.
         appointment.inner.encrypted_blob.reverse();
         let sig = cryptography::sign(&appointment.inner.to_vec(), &user2_sk).unwrap();
@@ -1335,7 +1339,7 @@ mod tests {
         // Check triggering with a valid formatted transaction but that is rejected by the Responder.
         let dispute_tx = get_random_tx();
         let (uuid, appointment) =
-            generate_dummy_appointment_with_user(user2_id, Some(&dispute_tx.txid()));
+            generate_dummy_appointment_with_user(user2_id, Some(&dispute_tx.compute_txid()));
         let sig = cryptography::sign(&appointment.inner.to_vec(), &user2_sk).unwrap();
         watcher.add_appointment(appointment.inner, sig).unwrap();
 

@@ -509,7 +509,7 @@ mod tests_private_api {
     async fn test_get_appointments() {
         let (internal_api, _s) = create_api().await;
 
-        let locator = Locator::new(get_random_tx().txid()).to_vec();
+        let locator = Locator::new(get_random_tx().compute_txid()).to_vec();
         let response = internal_api
             .get_appointments(Request::new(msgs::GetAppointmentsRequest { locator }))
             .await
@@ -525,7 +525,7 @@ mod tests_private_api {
 
         for i in 0..3 {
             // Create a dispute tx to be used for creating different dummy appointments with the same locator.
-            let dispute_txid = get_random_tx().txid();
+            let dispute_txid = get_random_tx().compute_txid();
 
             // The number of different appointments to create for this dispute tx.
             let appointments_to_create = 4 * i + 7;
@@ -593,7 +593,7 @@ mod tests_private_api {
                     .add_dummy_tracker_to_responder(&tracker);
             }
 
-            let locator = Locator::new(dispute_tx.txid());
+            let locator = Locator::new(dispute_tx.compute_txid());
 
             // Query for the current locator and assert it retrieves correct trackers.
             let response = internal_api
@@ -1021,7 +1021,7 @@ mod tests_public_api {
             .add_dummy_tracker_to_responder(&tracker);
 
         // Try to add it again using the API.
-        let appointment = generate_dummy_appointment(Some(&dispute_tx.txid())).inner;
+        let appointment = generate_dummy_appointment(Some(&dispute_tx.compute_txid())).inner;
         let signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
         match internal_api
             .add_appointment(Request::new(common_msgs::AddAppointmentRequest {

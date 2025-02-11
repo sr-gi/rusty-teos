@@ -23,7 +23,7 @@ impl UUID {
     pub fn new(locator: Locator, user_id: UserId) -> Self {
         let mut uuid_data = locator.to_vec();
         uuid_data.extend(user_id.0.serialize());
-        UUID(ripemd160::Hash::hash(&uuid_data).into_inner())
+        UUID(ripemd160::Hash::hash(&uuid_data).to_byte_array())
     }
 
     /// Serializes the [UUID] returning its byte representation.
